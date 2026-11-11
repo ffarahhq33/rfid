@@ -181,7 +181,6 @@ export default function App() {
             <strong>{pageInfo[page]?.[0]}</strong>
           </div>
           <div className="top-actions">
-            <span className="demo-tag">DEMO ENVIRONMENT</span>
             <button
               className="icon-button"
               aria-label="View operational alerts"
