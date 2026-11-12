@@ -1,0 +1,159 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
+
+/* ==========================================================================
+   RollFlow design tokens
+   The only place raw values live. styles.css and motion.css read these
+   through var(); nothing else should hard-code a colour, size or duration.
+
+   Colour roles
+     neutral  -> surfaces, borders, text (blue-tinted greys)
+     brand    -> the RollFlow blue: links, selection, progress
+     accent   -> orange, reserved for the one primary action on a screen and
+                 the current-location marker in navigation
+     status   -> ok / warn / danger / info, always paired fg + bg
+   ========================================================================== */
+:root {
+  color-scheme: light;
+
+  /* --- Typography ------------------------------------------------------- */
+  /* One family: Manrope has tabular figures, so numbers align in columns. */
+  --font-body: Manrope, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: 2rem;
+  --leading-tight: 1.25;
+  --leading-body: 1.5;
+
+  /* --- Space (4px grid) ------------------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+
+  /* --- Shape and size --------------------------------------------------- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 999px;
+  --control-h: 2.5rem;
+  --sidebar-w: 15.5rem;
+  --topbar-h: 3.5rem;
+
+  /* --- Colour: blue scale ----------------------------------------------- */
+  --blue-50: oklch(98.2% 0.003 264.5);
+  --blue-100: oklch(93.8% 0.019 248);
+  --blue-200: oklch(83.1% 0.055 251);
+  --blue-300: oklch(74.3% 0.086 251);
+  --blue-400: oklch(70.8% 0.1 251.5);
+  --blue-600: oklch(48% 0.1 252);
+  --blue-900: oklch(31.8% 0.059 250);
+
+  --gradient-hero: linear-gradient(
+    115deg,
+    var(--blue-100),
+    var(--blue-200) 65%,
+    var(--blue-300)
+  );
+
+  /* --- Colour: neutral roles -------------------------------------------- */
+  --color-bg: var(--blue-50);
+  --color-surface: oklch(100% 0 0);
+  --color-sunken: oklch(96% 0.012 250);
+  --color-border: oklch(91.5% 0.019 248);
+  --color-border-strong: oklch(83% 0.03 250);
+  --color-text: var(--blue-900);
+  --color-text-2: oklch(42% 0.05 250);
+  --color-text-3: oklch(50% 0.045 250);
+
+  /* --- Colour: brand and accent ----------------------------------------- */
+  --color-brand: var(--blue-400);
+  --color-brand-text: var(--blue-600);
+  --color-wash: oklch(70.8% 0.1 251.5 / 0.14);
+  --color-focus: oklch(48% 0.12 252);
+  --color-accent: oklch(57% 0.17 40);
+  --color-accent-hover: oklch(51% 0.17 40);
+  --color-on-accent: oklch(100% 0 0);
+
+  /* --- Colour: status (fg for text, bg for fills, ring for pulses) ------ */
+  --ok-fg: oklch(44% 0.11 157);
+  --ok-bg: oklch(95% 0.045 157);
+  --ok-solid: oklch(58% 0.13 157);
+  --ok-ring: oklch(72% 0.15 157 / 0.55);
+  --ok-ring-end: oklch(72% 0.15 157 / 0);
+  --warn-fg: oklch(44% 0.09 75);
+  --warn-bg: oklch(95.5% 0.055 90);
+  --danger-fg: oklch(48% 0.17 27);
+  --danger-bg: oklch(95% 0.03 27);
+  --danger-solid: oklch(57% 0.17 27);
+  --danger-ring: oklch(65% 0.18 27 / 0.5);
+  --danger-ring-end: oklch(65% 0.18 27 / 0);
+  --info-fg: oklch(40% 0.09 252);
+  --info-bg: oklch(94% 0.025 250);
+
+  /* Roll lifecycle stages, shared by the legend dots and the segmented bar */
+  --stage-1: var(--blue-400);
+  --stage-2: oklch(80% 0.14 85);
+  --stage-3: oklch(72% 0.09 200);
+  --stage-4: oklch(64% 0.11 290);
+  --stage-5: var(--ok-solid);
+
+  --brand-ring: oklch(70.8% 0.1 251.5 / 0.5);
+  --brand-ring-end: oklch(70.8% 0.1 251.5 / 0);
+
+  /* Loading placeholders */
+  --skeleton-base: var(--blue-100);
+  --skeleton-shine: oklch(97.5% 0.008 250);
+
+  /* --- Liquid glass: translucent fill, lit top edge, soft drop ----------- */
+  --glass-blur: blur(14px) saturate(170%);
+  --glass-fill: oklch(100% 0 0 / 0.55);
+  --glass-fill-hover: oklch(100% 0 0 / 0.78);
+  --glass-rim: oklch(31.8% 0.059 250 / 0.16);
+  --glass-shine:
+    inset 0 1px 0 oklch(100% 0 0 / 0.9),
+    inset 0 0 12px oklch(100% 0 0 / 0.35),
+    inset 0 -1px 0 oklch(31.8% 0.059 250 / 0.06);
+  --glass-drop:
+    0 1px 2px oklch(31.8% 0.059 250 / 0.08),
+    0 6px 14px oklch(31.8% 0.059 250 / 0.06);
+  --accent-top: oklch(58% 0.17 40 / 0.96);
+  --accent-bottom: oklch(50% 0.17 40 / 0.96);
+  --accent-top-hover: oklch(62% 0.17 40 / 0.96);
+  --accent-bottom-hover: oklch(54% 0.17 40 / 0.96);
+  --accent-rim: oklch(44% 0.16 40 / 0.55);
+  --accent-shine:
+    inset 0 1px 0 oklch(100% 0 0 / 0.4),
+    inset 0 0 10px oklch(100% 0 0 / 0.12),
+    inset 0 -1px 0 oklch(0% 0 0 / 0.12);
+  --accent-glow: 0 6px 16px oklch(57% 0.17 40 / 0.28);
+
+  /* --- Elevation -------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px oklch(31.8% 0.059 250 / 0.06);
+  --shadow-md: 0 4px 14px oklch(31.8% 0.059 250 / 0.1);
+  --shadow-lg: 0 24px 64px oklch(31.8% 0.059 250 / 0.25);
+  --scrim: oklch(31.8% 0.059 250 / 0.4);
+
+  /* --- Motion ----------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 340ms;
+  --stagger: 40ms;
+
+  /* --- Layers ----------------------------------------------------------- */
+  --z-topbar: 20;
+  --z-scrim: 25;
+  --z-sidebar: 30;
+  --z-modal: 100;
+  --z-toast: 150;
+}

@@ -1,0 +1,222 @@
+/* ==========================================================================
+   Motion: feedback only. Every animation here answers something the operator
+   did (press, scan, confirm, error) or something that changed (a value, a
+   page, a dialog). Nothing loops and nothing decorates. All of it eases out,
+   and all of it is switched off for operators who ask for reduced motion.
+   ========================================================================== */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
+@keyframes pop-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+@keyframes pulse-ok {
+  from {
+    box-shadow: 0 0 0 0 var(--ok-ring);
+  }
+  to {
+    box-shadow: 0 0 0 12px var(--ok-ring-end);
+  }
+}
+@keyframes pulse-error {
+  from {
+    box-shadow: 0 0 0 0 var(--danger-ring);
+  }
+  to {
+    box-shadow: 0 0 0 10px var(--danger-ring-end);
+  }
+}
+@keyframes confirm-wash {
+  from {
+    background-color: var(--ok-bg);
+  }
+}
+@keyframes bump {
+  30% {
+    transform: scale(1.12);
+    color: var(--ok-fg);
+  }
+}
+
+/* --- Navigation: a new page's blocks settle in one after another --------- */
+.page-view > * {
+  animation: rise-in var(--dur-slow) var(--ease-out) backwards;
+}
+.page-view > :nth-child(2) { animation-delay: calc(var(--stagger) * 1); }
+.page-view > :nth-child(3) { animation-delay: calc(var(--stagger) * 2); }
+.page-view > :nth-child(4) { animation-delay: calc(var(--stagger) * 3); }
+.page-view > :nth-child(n + 5) { animation-delay: calc(var(--stagger) * 4); }
+.kpi-grid > *,
+.kanban > * {
+  animation: rise-in var(--dur-slow) var(--ease-out) backwards;
+  animation-delay: calc(var(--stagger) * 2);
+}
+:is(.kpi-grid, .kanban) > :nth-child(2) { animation-delay: calc(var(--stagger) * 3); }
+:is(.kpi-grid, .kanban) > :nth-child(3) { animation-delay: calc(var(--stagger) * 4); }
+:is(.kpi-grid, .kanban) > :nth-child(n + 4) { animation-delay: calc(var(--stagger) * 5); }
+
+/* --- Press and hover: acknowledges the click ----------------------------- */
+button,
+input,
+select,
+.search,
+tbody tr,
+.sidebar {
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out);
+}
+.sidebar {
+  transition: transform 300ms var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+}
+button:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 60ms;
+}
+.topbar {
+  transition: box-shadow var(--dur-base) var(--ease-out);
+}
+
+/* --- Values: a change in the data is shown, not just swapped ------------- */
+.count {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+}
+.count.bump {
+  animation: bump 520ms var(--ease-out);
+}
+.segment {
+  transition: flex-grow 500ms var(--ease-out);
+}
+.stock-track i {
+  transition: width 500ms var(--ease-out);
+}
+
+/* --- Success: the pulse confirms a scan or a saved change ---------------- */
+tr.pulse td {
+  animation: confirm-wash 1.6s var(--ease-out);
+}
+tr.pulse .badge {
+  animation: pulse-ok 800ms var(--ease-out) 2;
+}
+.scan-fx.ok {
+  animation: pulse-ok 700ms var(--ease-out);
+}
+.scan-fx.error {
+  animation: pulse-error 600ms var(--ease-out);
+}
+.toast.success .toast-icon {
+  animation: pulse-ok 900ms var(--ease-out) 2;
+}
+.toast.error .toast-icon {
+  animation: pulse-error 700ms var(--ease-out);
+}
+
+/* --- Overlays ------------------------------------------------------------ */
+.modal-backdrop {
+  animation: fade-in 180ms var(--ease-out);
+}
+.modal {
+  animation: pop-in 240ms var(--ease-out);
+}
+.modal-backdrop.closing {
+  animation: fade-out 160ms var(--ease-out) forwards;
+}
+.modal-backdrop.closing .modal {
+  animation: pop-out 160ms var(--ease-out) forwards;
+}
+.toast {
+  animation: pop-in 280ms var(--ease-out);
+}
+.toast.leaving {
+  animation: pop-out 200ms var(--ease-out) forwards;
+}
+.nav-scrim {
+  animation: fade-in 200ms var(--ease-out);
+}
+
+/* The reduced-motion preference wins over everything in this file. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* --- Loading: skeletons shimmer until the data arrives --------------------- */
+@keyframes shimmer {
+  to {
+    background-position: -100% 0;
+  }
+}
+.skeleton {
+  animation: shimmer 1.5s linear infinite;
+}
+
+/* --- Tag received: the number arrives character by character, the box
+       pulses to confirm, and its status settles in. ----------------------- */
+@keyframes pulse-brand {
+  from {
+    box-shadow: 0 0 0 0 var(--brand-ring);
+  }
+  to {
+    box-shadow: 0 0 0 12px var(--brand-ring-end);
+  }
+}
+@keyframes char-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.35em);
+  }
+}
+.tag-reader {
+  transition:
+    background-color var(--dur-slow) var(--ease-out),
+    border-color var(--dur-slow) var(--ease-out);
+}
+.tag-reader.checking {
+  animation: pulse-brand 700ms var(--ease-out);
+}
+.tag-reader.ready,
+.tag-reader.registered {
+  animation: pulse-ok 800ms var(--ease-out);
+}
+.tag-reader.duplicate {
+  animation: pulse-error 700ms var(--ease-out);
+}
+.tag-char {
+  display: inline-block;
+  animation: char-in 300ms var(--ease-out) backwards;
+  animation-delay: calc(var(--i) * 16ms);
+}
+.tag-status {
+  animation: pop-in 220ms var(--ease-out);
+}

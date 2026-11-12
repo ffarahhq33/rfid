@@ -1,5 +1,24 @@
-import React from "react";
-import { Radio, Search, X, ArrowUpRight, LoaderCircle } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Radio, Search, X, LoaderCircle } from "lucide-react";
+
+export const reducedMotion = () =>
+  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+// Error feedback: a short horizontal shake of the element that was rejected.
+export function shake(el) {
+  if (!el || reducedMotion()) return;
+  el.animate(
+    [
+      { transform: "translateX(0)" },
+      { transform: "translateX(-7px)" },
+      { transform: "translateX(5px)" },
+      { transform: "translateX(-3px)" },
+      { transform: "translateX(0)" },
+    ],
+    { duration: 340, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  );
+}
+
 export function Badge({ children }) {
   return (
     <span
@@ -7,9 +26,9 @@ export function Badge({ children }) {
         "badge " +
         (/Available|Received|Completed|Released|Connected/.test(children)
           ? "green"
-          : /Transit|Pending|Issued|Disconnected/.test(children)
+          : /Transit|Pending|Issued|Disconnected|Low/.test(children)
             ? "amber"
-            : "purple")
+            : "")
       }
     >
       {children}
@@ -30,69 +49,134 @@ export function Card({ title, subtitle, action, children, className = "" }) {
     </section>
   );
 }
-export function KPI({ label, value, note, icon: Icon }) {
+
+// Renders a number and eases to each new value, bumping so a change in the
+// data is noticed. It does not animate on first paint. Non-numeric values
+// ("—") render as they are.
+export function Count({ value }) {
+  const match = /^(-?\d+(?:\.\d+)?)(.*)$/.exec(String(value));
+  const target = match ? Number(match[1]) : null;
+  const [shown, setShown] = useState(target);
+  const [bump, setBump] = useState(0);
+  const from = useRef(target);
+  const last = useRef(target);
+  useEffect(() => {
+    if (target == null) return;
+    if (last.current !== target) setBump((b) => b + 1);
+    last.current = target;
+    if (reducedMotion()) {
+      setShown(target);
+      return;
+    }
+    const start = performance.now(),
+      origin = from.current,
+      duration = 650;
+    let frame;
+    const tick = (now) => {
+      const p = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - p, 4);
+      setShown(Math.round(origin + (target - origin) * eased));
+      if (p < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    // Frames stop in a hidden tab, so always land on the real value.
+    const settle = setTimeout(() => setShown(target), duration + 120);
+    from.current = target;
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settle);
+    };
+  }, [target]);
+  if (target == null) return <span className="count">{value}</span>;
+  return (
+    <span key={bump} className={bump ? "count bump" : "count"}>
+      {shown}
+      {match[2]}
+    </span>
+  );
+}
+export function KPI({ label, value, note }) {
   return (
     <div className="kpi">
-      <div className="kpi-top">
-        <span>{label}</span>
-        <div className="icon-box">
-          <Icon size={19} />
-        </div>
-      </div>
-      <strong>{value}</strong>
-      <small>{note}</small>
+      <span>{label}</span>
+      <strong>
+        <Count value={value} />
+      </strong>
+      {note && <small>{note}</small>}
     </div>
   );
 }
-export function Scanner({ value, onChange, onScan }) {
+// `feedback` is { type: "ok" | "error", n } where n changes on every scan.
+export function Scanner({ value, onChange, onScan, feedback }) {
+  const input = useRef(null);
+  useEffect(() => {
+    if (feedback?.type === "error") shake(input.current);
+  }, [feedback]);
   return (
     <div className="scanner">
+      {feedback && (
+        <i key={feedback.n} className={"scan-fx " + feedback.type} aria-hidden />
+      )}
       <div className="scanner-label">
         <Radio size={18} />
         <strong>RFID scan station</strong>
-        <Badge>Disconnected</Badge>
       </div>
       <p>Reader offline · use a mock EPC to try this workflow.</p>
-      <div className="scan-input">
+      <form
+        className="scan-input"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onScan();
+          input.current?.focus();
+        }}
+      >
         <input
+          ref={input}
           aria-label="RFID EPC"
           placeholder="Scan or enter RFID EPC…"
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
-        <button onClick={onScan}>Add scan</button>
-      </div>
+        <button type="submit">Add scan</button>
+      </form>
     </div>
   );
 }
-export function Table({ rolls, onSelect }) {
+// Rows open the roll on click; the Roll ID is a real button so the keyboard
+// can do the same. `pulse` is a Set of Roll IDs to confirm with a green pulse.
+export function Table({ rolls, onSelect, pulse }) {
+  const body = useRef(null);
+  const pulseKey = [...(pulse ?? [])].join();
+  useEffect(() => {
+    if (!pulseKey) return;
+    body.current
+      ?.querySelector("tr.pulse")
+      ?.scrollIntoView({
+        block: "nearest",
+        behavior: reducedMotion() ? "auto" : "smooth",
+      });
+  }, [pulseKey]);
   return (
     <div className="table-scroll">
       <table>
         <thead>
           <tr>
-            {[
-              "Roll ID / EPC",
-              "Model / Lot",
-              "Length",
-              "Location",
-              "Status",
-              "",
-            ].map((h, i) => (
-              <th key={i}>{h}</th>
-            ))}
+            {["Roll ID / EPC", "Model / Lot", "Length", "Location", "Status"].map(
+              (h) => (
+                <th key={h}>{h}</th>
+              ),
+            )}
           </tr>
         </thead>
-        <tbody>
+        <tbody ref={body}>
           {rolls.map((r) => (
-            <tr key={r.id}>
+            <tr
+              key={r.id}
+              className={"clickable" + (pulse?.has(r.id) ? " pulse" : "")}
+              onClick={() => onSelect(r)}
+            >
               <td>
-                <button
-                  className="text-button mono"
-                  onClick={() => onSelect(r)}
-                >
-                  {r.id}
-                </button>
+                <button className="text-button mono">{r.id}</button>
                 <small className="subtext mono">
                   {r.epc || "Tag released"}
                 </small>
@@ -105,15 +189,6 @@ export function Table({ rolls, onSelect }) {
               <td>{r.location}</td>
               <td>
                 <Badge>{r.status}</Badge>
-              </td>
-              <td>
-                <button
-                  className="icon-button"
-                  aria-label={"View " + r.id}
-                  onClick={() => onSelect(r)}
-                >
-                  <ArrowUpRight size={17} />
-                </button>
               </td>
             </tr>
           ))}
@@ -140,9 +215,28 @@ export function SearchBox({
     </label>
   );
 }
+// Children may be a function receiving `close`, which plays the exit
+// animation before the dialog is removed.
 export function Dialog({ title, onClose, children }) {
+  const [closing, setClosing] = useState(false);
+  const timer = useRef();
+  const close = () => {
+    if (closing) return;
+    if (reducedMotion()) return onClose();
+    setClosing(true);
+    timer.current = setTimeout(onClose, 170);
+  };
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && close();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  useEffect(() => () => clearTimeout(timer.current), []);
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className={"modal-backdrop" + (closing ? " closing" : "")}
+      onClick={close}
+    >
       <section
         role="dialog"
         aria-modal="true"
@@ -155,12 +249,12 @@ export function Dialog({ title, onClose, children }) {
           <button
             aria-label="Close dialog"
             className="icon-button"
-            onClick={onClose}
+            onClick={close}
           >
             <X />
           </button>
         </header>
-        {children}
+        {typeof children === "function" ? children(close) : children}
       </section>
     </div>
   );
