@@ -2,34 +2,35 @@ import React from "react";
 import {
   Package,
   Truck,
-  RotateCcw,
   ArrowUpRight,
   ArrowRight,
-  Check,
   AlertTriangle,
-  Activity,
 } from "lucide-react";
-import { Card, KPI, Badge } from "../components/UI";
+import { Card, KPI, Count } from "../components/UI";
+
+const STAGES = ["PK Storage", "In Transit", "SDY Storage", "Production", "Completed"];
+
 export default function Dashboard({ rolls, navigate, events }) {
-  const pk = rolls.filter((r) => r.location.startsWith("PK")).length,
-    transit = rolls.filter((r) => r.status === "In Transit").length,
-    sdy = rolls.filter((r) => r.status === "Received").length,
-    released = rolls.filter((r) => r.status === "Released").length,
+  const count = (status) => rolls.filter((r) => r.status === status).length,
+    pk = rolls.filter((r) => r.location.startsWith("PK")).length,
+    transit = count("In Transit"),
+    sdy = count("Received"),
+    released = count("Released"),
     eligible = rolls.filter((r) =>
       ["Completed", "Released"].includes(r.status),
-    ).length;
+    ).length,
+    stages = [pk, transit, sdy, count("Issued"), eligible];
   return (
     <>
       <div className="overview-banner">
         <div>
-          <span className="eyebrow">CONNECTED OPERATIONS</span>
           <h2>
             Every roll. Every movement.
             <br />
             <span>One complete picture.</span>
           </h2>
           <p>Material visibility across Port Klang and Sendayan.</p>
-          <button onClick={() => navigate(7)}>
+          <button className="secondary" onClick={() => navigate(7)}>
             Explore movement history <ArrowUpRight size={16} />
           </button>
         </div>
@@ -59,69 +60,36 @@ export default function Dashboard({ rolls, navigate, events }) {
           </div>
         </div>
       </div>
-      <div className="section-label">
-        <h2>At a glance</h2>
-        <span>
-          <i className="dot" /> Mock operational snapshot
-        </span>
-      </div>
       <div className="kpi-grid">
-        <KPI
-          label="PK available rolls"
-          value={pk}
-          note="Current available stock"
-          icon={Package}
-        />
-        <KPI
-          label="In transit"
-          value={transit}
-          note="Awaiting SDY receipt"
-          icon={Truck}
-        />
-        <KPI
-          label="SDY available rolls"
-          value={sdy}
-          note="Ready for production"
-          icon={Package}
-        />
+        <KPI label="PK available rolls" value={pk} />
+        <KPI label="In transit" value={transit} />
+        <KPI label="SDY available rolls" value={sdy} />
         <KPI
           label="RFID reset rate"
           value={eligible ? Math.round((released / eligible) * 100) + "%" : "—"}
           note={`${released} of ${eligible} eligible tags released`}
-          icon={RotateCcw}
         />
       </div>
       <div className="dashboard-grid">
         <Card
-          title="Roll movement overview"
-          subtitle="Current distribution across the roll lifecycle"
-          action={<span className="subtle">{rolls.length} demo rolls</span>}
+          title="Roll movement"
+          action={<span className="subtle">{rolls.length} rolls</span>}
         >
           <div className="flow-stages">
-            {[
-              ["PK Storage", pk],
-              ["In Transit", transit],
-              ["SDY Storage", sdy],
-              ["Production", rolls.filter((r) => r.status === "Issued").length],
-              ["Completed", eligible],
-            ].map(([s, n], i) => (
-              <div key={s}>
-                <span className={"stage-icon stage-" + i}>
-                  {i === 4 ? <Check size={19} /> : <Package size={19} />}
-                </span>
-                <strong>{n}</strong>
-                <small>{s}</small>
+            {STAGES.map((label, i) => (
+              <div key={label}>
+                <strong>
+                  <Count value={stages[i]} />
+                </strong>
+                <small>
+                  <span className={"stage-dot stage-" + i} />
+                  {label}
+                </small>
               </div>
             ))}
           </div>
-          <div className="segmented-bar">
-            {[
-              pk,
-              transit,
-              sdy,
-              rolls.filter((r) => r.status === "Issued").length,
-              eligible,
-            ].map((n, i) => (
+          <div className="segmented-bar" aria-hidden>
+            {stages.map((n, i) => (
               <div
                 key={i}
                 style={{ flex: n }}
@@ -136,13 +104,9 @@ export default function Dashboard({ rolls, navigate, events }) {
             </button>
           </div>
         </Card>
-        <Card
-          title="Needs attention"
-          subtitle="Keep the next step moving"
-          action={<span className="count-pill">2</span>}
-        >
+        <Card title="Needs attention">
           <button className="alert-row" onClick={() => navigate(4)}>
-            <span className="alert-icon amber">
+            <span className="alert-icon">
               <Truck size={19} />
             </span>
             <div>
@@ -163,56 +127,29 @@ export default function Dashboard({ rolls, navigate, events }) {
           </button>
         </Card>
       </div>
-      <div className="dashboard-grid bottom-grid">
-        <Card
-          title="Recent activity"
-          subtitle="Latest transactions across your stations"
-          action={
-            <button className="text-button" onClick={() => navigate(7)}>
-              View all <ArrowUpRight size={15} />
-            </button>
-          }
-        >
-          <div className="activities">
-            {events.slice(0, 4).map((e, i) => (
-              <div className="activity" key={i}>
-                <div className="activity-dot">
-                  <Activity size={16} />
-                </div>
-                <div>
-                  <strong>{e.action}</strong>
-                  <p className="mono">{e.id}</p>
-                </div>
-                <div className="activity-time">
-                  <span>{e.time}</span>
-                  <small>{e.site}</small>
-                </div>
+      <Card
+        title="Recent activity"
+        action={
+          <button className="text-button" onClick={() => navigate(7)}>
+            View all <ArrowUpRight size={15} />
+          </button>
+        }
+      >
+        <div className="activities">
+          {events.slice(0, 5).map((e, i) => (
+            <div className="activity" key={e.k ?? i}>
+              <div>
+                <strong>{e.action}</strong>
+                <p className="mono">{e.id}</p>
               </div>
-            ))}
-          </div>
-        </Card>
-        <Card
-          title="Station shortcuts"
-          subtitle="Your daily operations, one click away"
-        >
-          <div className="shortcuts">
-            {[
-              [1, "Register a roll", "Create a new roll identity"],
-              [3, "Prepare dispatch", "Move material to Sendayan"],
-              [4, "Receive shipment", "Verify incoming material"],
-            ].map(([n, t, d]) => (
-              <button key={n} onClick={() => navigate(n)}>
-                <span className="shortcut-number">0{n}</span>
-                <span>
-                  <strong>{t}</strong>
-                  <small>{d}</small>
-                </span>
-                <ArrowRight size={17} />
-              </button>
-            ))}
-          </div>
-        </Card>
-      </div>
+              <div className="activity-time">
+                <span>{e.time}</span>
+                <small>{e.site}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
     </>
   );
 }

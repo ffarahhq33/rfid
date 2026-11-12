@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Skeleton, DashboardSkeleton } from "./components/Skeleton";
+import "./design/tokens.css";
 import "./App.css";
+import "./motion.css";
 
 const REFRESH_MS = 3000;
 
@@ -66,22 +69,96 @@ function statusTone(status) {
   return "slate";
 }
 
+const reducedMotion = () =>
+  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+// Counts up on first paint, then eases to each new value from the API and
+// bumps so a change is noticeable. Non-numeric values ("—") render as is.
+function Count({ value }) {
+  const match = /^(-?\d+(?:\.\d+)?)(.*)$/.exec(String(value));
+  const target = match ? Number(match[1]) : null;
+  const [shown, setShown] = useState(target);
+  const [bump, setBump] = useState(0);
+  const from = useRef(target);
+  const last = useRef(target);
+  useEffect(() => {
+    if (target == null) return;
+    if (last.current != null && last.current !== target) setBump((b) => b + 1);
+    last.current = target;
+    if (reducedMotion()) {
+      setShown(target);
+      return;
+    }
+    const start = performance.now();
+    const origin = from.current;
+    const duration = 650;
+    let frame;
+    const tick = (now) => {
+      const p = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - p, 4);
+      setShown(Math.round(origin + (target - origin) * eased));
+      if (p < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    // Frames stop in a hidden tab, so always land on the real value.
+    const settle = setTimeout(() => setShown(target), duration + 120);
+    from.current = target;
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settle);
+    };
+  }, [target]);
+  if (target == null) return <span className="count">{value}</span>;
+  return (
+    <span key={bump} className={bump ? "count bump" : "count"}>
+      {shown}
+      {match[2]}
+    </span>
+  );
+}
+
+// Washes its content green whenever the value changes after first paint.
+function Flash({ children }) {
+  const value = String(children);
+  const [state, setState] = useState({ value, changes: 0 });
+  if (state.value !== value) setState({ value, changes: state.changes + 1 });
+  return (
+    <span key={state.changes} className={state.changes ? "flash" : undefined}>
+      {children}
+    </span>
+  );
+}
+
+// A table row that remembers how it arrived: staggered with the first paint,
+// or highlighted as a new record from a later refresh.
+function Row({ index, fresh, children }) {
+  const [mount] = useState({ index, fresh });
+  return (
+    <tr
+      className={mount.fresh ? "row-fresh" : undefined}
+    >
+      {children}
+    </tr>
+  );
+}
+
 function KpiCard({ label, value, subtext, accent = "blue" }) {
   return (
     <div className={`kpi-card accent-${accent}`}>
       <div className="kpi-label">{label}</div>
-      <div className="kpi-value">{value}</div>
-      <div className="kpi-subtext">{subtext}</div>
+      <div className="kpi-value">
+        <Count value={value} />
+      </div>
+      {subtext ? <div className="kpi-subtext">{subtext}</div> : null}
     </div>
   );
 }
 
-function SectionCard({ title, eyebrow, right, children, className = "" }) {
+function SectionCard({ title, right, children, className = "" }) {
   return (
     <section className={`section-card ${className}`}>
       <div className="section-head">
         <div>
-          {eyebrow ? <div className="section-eyebrow">{eyebrow}</div> : null}
           <h3 className="section-title">{title}</h3>
         </div>
         {right ? <div className="section-right">{right}</div> : null}
@@ -91,8 +168,13 @@ function SectionCard({ title, eyebrow, right, children, className = "" }) {
   );
 }
 
-function Badge({ children, tone = "slate" }) {
-  return <span className={`badge badge-${tone}`}>{children}</span>;
+function Badge({ children, tone = "slate", live = false }) {
+  return (
+    <span className={`badge badge-${tone}`}>
+      {live ? <i className="live-dot" aria-hidden /> : null}
+      {children}
+    </span>
+  );
 }
 
 function EmptyState({ text }) {
@@ -109,6 +191,11 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(new Date());
   const [search, setSearch] = useState("");
+  // Rows painted with a view are staggered; rows that arrive from a later
+  // refresh are highlighted as new.
+  const [settled, setSettled] = useState(false);
+  const seen = useRef(new Set());
+  const [scrolled, setScrolled] = useState(false);
 
   const apiBase = getApiBase();
 
@@ -119,6 +206,8 @@ function App() {
 
   useEffect(() => {
     const onKey = (e) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || "");
+      if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key.toLowerCase() === "f") {
         setFactoryMode((prev) => !prev);
       }
@@ -188,6 +277,30 @@ function App() {
     });
   }, [allRolls]);
 
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    setSettled(false);
+    const timer = setTimeout(() => setSettled(true), 900);
+    return () => clearTimeout(timer);
+  }, [view, factoryMode]);
+
+  useEffect(() => {
+    scannedBatch.forEach((r) =>
+      seen.current.add(`b:${r.epc}-${r.scannedAt || ""}`),
+    );
+    allRolls.forEach((r) => seen.current.add(`i:${r.epc}`));
+    shipments.forEach((s) => seen.current.add(`s:${s.lot_no}`));
+  }, [dashboardData, rollsData]);
+
+  const isFresh = (key) =>
+    settled && seen.current.size > 0 && !seen.current.has(key);
+
   const scannedCount = dashboardData?.scannedRolls ?? scannedBatch.length;
   const availableCount = dashboardData?.inventoryRolls ?? availableRolls.length;
   const shipmentsOutCount =
@@ -208,13 +321,11 @@ function App() {
     {
       label: "Available at PK",
       value: availableCount,
-      subtext: "Registered stock",
       accent: "green",
     },
     {
       label: "Shipments Out",
       value: shipmentsOutCount,
-      subtext: "Outbound shipment count",
       accent: "amber",
     },
     {
@@ -320,10 +431,15 @@ function App() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((roll) => {
+            {rows.map((roll, i) => {
               const statusText = displayRollStatus(roll);
+              const rowKey = `${roll.epc}-${roll.scannedAt || ""}`;
               return (
-                <tr key={`${roll.epc}-${roll.scannedAt || ""}`}>
+                <Row
+                  key={rowKey}
+                  index={settled ? 0 : i}
+                  fresh={isFresh("b:" + rowKey)}
+                >
                   <td>
                     <div className="table-primary">{roll.epc || "—"}</div>
                     <div className="table-secondary">{roll.serial || "—"}</div>
@@ -334,7 +450,7 @@ function App() {
                     <Badge tone={statusTone(statusText)}>{statusText}</Badge>
                   </td>
                   <td>{formatDateTime(roll.scannedAt)}</td>
-                </tr>
+                </Row>
               );
             })}
           </tbody>
@@ -352,54 +468,23 @@ function App() {
           ))}
         </div>
 
-        <SectionCard
-          eyebrow="Material Movement"
-          title="Port Klang → Sendayan"
-        >
-          <div className="flow-strip">
-            <div className="flow-node">
-              <div className="flow-code">PK</div>
-              <div>
-                <div className="flow-name">Port Klang</div>
-                <div className="flow-sub">RFID scanning and dispatch</div>
-              </div>
-            </div>
-
-            <div className="flow-arrow-wrap">
-              <div className="flow-arrow-label">Outbound logistics</div>
-              <div className="flow-arrow">→</div>
-              <div className="flow-arrow-sub">Shipment tracking</div>
-            </div>
-
-            <div className="flow-node flow-node-dest">
-              <div className="flow-code">SDY</div>
-              <div>
-                <div className="flow-name">Sendayan</div>
-                <div className="flow-sub">Receiving integration pending</div>
-              </div>
-            </div>
-          </div>
-        </SectionCard>
-
         <div className="content-grid two-col-main">
           <SectionCard
-            eyebrow="Live Data"
             title="RFID Scanning Activity"
-            right={
-              <Badge tone={backendOnline ? "green" : "amber"}>
-                {backendOnline ? "API Connected" : "API Issue"}
-              </Badge>
-            }
           >
             <div className="summary-band">
               <div className="summary-band-left">
-                <div className="summary-big">{scannedCount}</div>
+                <div className="summary-big">
+                  <Count value={scannedCount} />
+                </div>
                 <div className="summary-caption">Scanned rolls</div>
               </div>
               <div className="summary-band-right">
                 <div className="summary-detail">
                   <span>Latest recorded EPC</span>
-                  <strong>{latestScan?.epc || "—"}</strong>
+                  <strong>
+                    <Flash>{latestScan?.epc || "—"}</Flash>
+                  </strong>
                 </div>
                 <div className="summary-detail">
                   <span>Last recorded time</span>
@@ -409,7 +494,7 @@ function App() {
             </div>
           </SectionCard>
 
-          <SectionCard eyebrow="Movement History" title="Recent Shipment Timeline">
+          <SectionCard title="Recent Shipment Timeline">
             {shipments.length ? (
               <div className="timeline-list">
                 {shipments.slice(0, 4).map((ship) => (
@@ -422,7 +507,6 @@ function App() {
                       </div>
                       <small>{formatDateTime(ship.departed_at)}</small>
                     </div>
-                    <Badge tone="amber">Outbound</Badge>
                   </div>
                 ))}
               </div>
@@ -433,9 +517,8 @@ function App() {
         </div>
 
         <SectionCard
-          eyebrow="RFID Roll Data"
           title="Current Gate A Batch"
-          right={<Badge tone="blue">{recentBatch.length} records</Badge>}
+          right={<span className="subtle">{recentBatch.length} records</span>}
         >
           {renderCompactTable(recentBatch.slice(0, 8))}
         </SectionCard>
@@ -447,13 +530,7 @@ function App() {
     return (
       <>
         <SectionCard
-          eyebrow="Station 2 • Port Klang"
           title="Live RFID Control Board"
-          right={
-            <Badge tone={backendOnline ? "green" : "amber"}>
-              {backendOnline ? "API Online" : "Connection Issue"}
-            </Badge>
-          }
         >
           <div className="live-board-grid">
             {kpis.map((item) => (
@@ -464,7 +541,9 @@ function App() {
           <div className="live-meta-row">
             <div className="live-meta-card">
               <span>Latest RFID EPC</span>
-              <strong>{latestScan?.epc || "—"}</strong>
+              <strong>
+                    <Flash>{latestScan?.epc || "—"}</Flash>
+                  </strong>
             </div>
             <div className="live-meta-card">
               <span>Recorded at</span>
@@ -474,9 +553,8 @@ function App() {
         </SectionCard>
 
         <SectionCard
-          eyebrow="RFID Roll Data"
           title="Live RFID Scan Batch"
-          right={<Badge tone="blue">{recentBatch.length} records</Badge>}
+          right={<span className="subtle">{recentBatch.length} records</span>}
         >
           <div className="table-toolbar">
             <input
@@ -517,9 +595,8 @@ function App() {
         </div>
 
         <SectionCard
-          eyebrow="RFID Roll Records"
           title="Port Klang Roll Inventory"
-          right={<Badge tone="blue">{filteredInventory.length} records</Badge>}
+          right={<span className="subtle">{filteredInventory.length} records</span>}
         >
           <div className="table-toolbar">
             <input
@@ -544,10 +621,14 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredInventory.map((roll) => {
+                  {filteredInventory.map((roll, i) => {
                     const statusText = displayRollStatus(roll);
                     return (
-                      <tr key={roll.epc}>
+                      <Row
+                        key={roll.epc}
+                        index={settled ? 0 : i}
+                        fresh={isFresh("i:" + roll.epc)}
+                      >
                         <td>
                           <div className="table-primary">{roll.epc || "—"}</div>
                           <div className="table-secondary">{roll.serial || "—"}</div>
@@ -558,7 +639,7 @@ function App() {
                           <Badge tone={statusTone(statusText)}>{statusText}</Badge>
                         </td>
                         <td>{roll.ship_id || "—"}</td>
-                      </tr>
+                      </Row>
                     );
                   })}
                 </tbody>
@@ -579,13 +660,11 @@ function App() {
           <KpiCard
             label="Shipments Out"
             value={shipmentsOutCount}
-            subtext="Backend summary"
             accent="amber"
           />
           <KpiCard
             label="SDY Received"
             value={receivedAtSdyCount > 0 ? receivedAtSdyCount : "—"}
-            subtext="Receiving integration"
             accent="green"
           />
           <KpiCard
@@ -599,12 +678,11 @@ function App() {
           <KpiCard
             label="Transit Visibility"
             value={shipments.length}
-            subtext="Tracked shipment records"
             accent="blue"
           />
         </div>
 
-        <SectionCard eyebrow="Logistics Flow" title="Outbound PK → SDY">
+        <SectionCard title="Outbound PK → SDY">
           <div className="flow-strip">
             <div className="flow-node">
               <div className="flow-code">PK</div>
@@ -631,9 +709,8 @@ function App() {
         </SectionCard>
 
         <SectionCard
-          eyebrow="Shipment Operations"
           title="PK → SDY Shipment Register"
-          right={<Badge tone="blue">{shipments.length} records</Badge>}
+          right={<span className="subtle">{shipments.length} records</span>}
         >
           {shipments.length ? (
             <div className="table-wrap">
@@ -649,8 +726,12 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {shipments.map((ship) => (
-                    <tr key={ship.lot_no}>
+                  {shipments.map((ship, i) => (
+                    <Row
+                      key={ship.lot_no}
+                      index={settled ? 0 : i}
+                      fresh={isFresh("s:" + ship.lot_no)}
+                    >
                       <td>{ship.lot_no || "—"}</td>
                       <td>{ship.qty ?? "—"}</td>
                       <td>{formatDateTime(ship.departed_at)}</td>
@@ -661,7 +742,7 @@ function App() {
                           {String(ship.status || "—").toUpperCase()}
                         </Badge>
                       </td>
-                    </tr>
+                    </Row>
                   ))}
                 </tbody>
               </table>
@@ -678,20 +759,15 @@ function App() {
     return (
       <>
         <SectionCard
-          eyebrow="Monitoring Notices"
           title="Alerts & Follow-up"
-          right={<Badge tone="amber">Monitoring status</Badge>}
         >
           {exceptions.length ? (
             <div className="exception-list">
               {exceptions.map((item, idx) => (
                 <div className="exception-item" key={idx}>
-                  <div className="exception-icon">i</div>
                   <div className="exception-content">
                     <strong>{item}</strong>
-                    <small>Review system status and integration progress.</small>
                   </div>
-                  <Badge tone="slate">Pending</Badge>
                 </div>
               ))}
             </div>
@@ -714,7 +790,7 @@ function App() {
         </div>
 
         <div className="content-grid two-col-main">
-          <SectionCard eyebrow="RFID Analytics" title="Inventory by Model">
+          <SectionCard title="Inventory by Model">
             {inventoryByModel.length ? (
               <div className="bar-list">
                 {inventoryByModel.map((item) => {
@@ -728,7 +804,9 @@ function App() {
                       <div className="bar-track">
                         <div className="bar-fill" style={{ width: `${width}%` }} />
                       </div>
-                      <div className="bar-value">{item.count}</div>
+                      <div className="bar-value">
+                        <Count value={item.count} />
+                      </div>
                     </div>
                   );
                 })}
@@ -738,7 +816,7 @@ function App() {
             )}
           </SectionCard>
 
-          <SectionCard eyebrow="Transit Performance" title="Shipment Analytics">
+          <SectionCard title="Shipment Analytics">
             <div className="analytics-metrics">
               <div className="analytics-metric">
                 <span>Confirmed completed shipments</span>
@@ -764,6 +842,7 @@ function App() {
   }
 
   function renderDetailedContent() {
+    if (loading) return <DashboardSkeleton />;
     switch (view) {
       case "live":
         return renderLiveMonitor();
@@ -786,15 +865,12 @@ function App() {
       <div className="factory-tv-shell">
         <header className="factory-tv-header">
           <div>
-            <div className="page-kicker">SUGIHARA RFID CONTROL CENTER</div>
             <h1>Factory TV View</h1>
-            <div className="page-subtitle">
-              Station 2 • Port Klang • Gate A • RFID Monitoring
-            </div>
+            <div className="subtle">Station 2 • Port Klang • Gate A</div>
           </div>
 
           <div className="factory-tv-header-right">
-            <Badge tone={backendOnline ? "green" : "amber"}>
+            <Badge tone={backendOnline ? "green" : "amber"} live={backendOnline}>
               {backendOnline ? "Backend Online" : "Backend Issue"}
             </Badge>
             <div className="tv-clock">
@@ -824,21 +900,23 @@ function App() {
 
         <div className="factory-tv-panels">
           <SectionCard
-            eyebrow="Monitoring Panel"
             title="Live RFID Monitor"
-            right={<Badge tone="green">Live View</Badge>}
             className="tv-panel"
           >
             <div className="tv-live-panel">
               <div className="tv-live-main">
-                <div className="tv-live-count">{scannedCount}</div>
+                <div className="tv-live-count">
+                  <Count value={scannedCount} />
+                </div>
                 <div className="tv-live-label">rolls in current batch</div>
               </div>
 
               <div className="tv-live-info">
                 <div className="tv-info-item">
                   <span>Latest scanned EPC</span>
-                  <strong>{latestScan?.epc || "—"}</strong>
+                  <strong>
+                    <Flash>{latestScan?.epc || "—"}</Flash>
+                  </strong>
                 </div>
                 <div className="tv-info-item">
                   <span>Model</span>
@@ -857,9 +935,7 @@ function App() {
           </SectionCard>
 
           <SectionCard
-            eyebrow="Tracking Panel"
             title="PK → SDY Tracking"
-            right={<Badge tone="amber">Phase 2</Badge>}
             className="tv-panel"
           >
             <div className="tv-flow-card">
@@ -888,7 +964,9 @@ function App() {
             <div className="tv-tracking-status">
               <div className="tv-status-box">
                 <span>Shipments out</span>
-                <strong>{shipmentsOutCount}</strong>
+                <strong>
+                  <Count value={shipmentsOutCount} />
+                </strong>
               </div>
               <div className="tv-status-box">
                 <span>Received at SDY</span>
@@ -899,24 +977,12 @@ function App() {
         </div>
 
         <SectionCard
-          eyebrow="Recent Activity"
           title="Current RFID Activity"
-          right={<Badge tone="blue">{recentFactoryRows.length} latest scans</Badge>}
+          right={<span className="subtle">{recentFactoryRows.length} latest scans</span>}
           className="factory-tv-table-card"
         >
           {renderCompactTable(recentFactoryRows)}
         </SectionCard>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="app-loading">
-        <div className="loading-card">
-          <div className="loading-title">Loading RFID dashboard…</div>
-          <div className="loading-subtitle">Connecting to Node.js backend</div>
-        </div>
       </div>
     );
   }
@@ -926,7 +992,13 @@ function App() {
       {!factoryMode && (
         <aside className="sidebar">
           <div className="brand-block">
-            <div className="brand-logo">SG</div>
+            <img
+              className="brand-logo"
+              src="/sugihara-logo.png"
+              alt=""
+              width="40"
+              height="40"
+            />
             <div className="brand-text">
               <strong>SUGIHARA</strong>
               <span>Digital Operations</span>
@@ -966,14 +1038,8 @@ function App() {
       <main className="main-area">
         {!factoryMode ? (
           <>
-            <header className="top-header">
-              <div className="top-header-left">
-                <div className="page-kicker">MANUFACTURING LOGISTICS</div>
-                <h1>{pageTitleMap[view]}</h1>
-                <div className="page-subtitle">
-                  Port Klang to Sendayan • RFID Tracking & Logistics
-                </div>
-              </div>
+            <header className={`top-header${scrolled ? " scrolled" : ""}`}>
+              <h1>{pageTitleMap[view]}</h1>
 
               <div className="top-header-right">
                 <div className="header-clock">
@@ -988,9 +1054,13 @@ function App() {
                   </span>
                 </div>
 
-                <Badge tone={backendOnline ? "green" : "amber"}>
-                  {backendOnline ? "Backend Online" : "Connection Issue"}
-                </Badge>
+                {loading ? (
+                  <Skeleton w="7.5rem" h="1.5rem" r="var(--radius-full)" />
+                ) : (
+                  <Badge tone={backendOnline ? "green" : "amber"} live={backendOnline}>
+                    {backendOnline ? "Backend Online" : "Connection Issue"}
+                  </Badge>
+                )}
 
                 <button
                   className="tv-mode-btn"
@@ -1001,20 +1071,15 @@ function App() {
               </div>
             </header>
 
-            <div className="info-strip">
-              <span>Development environment</span>
-              <span>Live Node.js API</span>
-              <span>Dispatch disabled in this dashboard</span>
-              <span>{REFRESH_MS / 1000}-second refresh</span>
-            </div>
-
             {error ? (
               <div className="error-banner">
                 Backend/API issue: {error}
               </div>
             ) : null}
 
-            <div className="page-content">{renderDetailedContent()}</div>
+            <div className="page-content" key={view}>
+              {renderDetailedContent()}
+            </div>
           </>
         ) : (
           renderFactoryMode()

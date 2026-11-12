@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   LayoutDashboard,
   ScanLine,
@@ -9,20 +9,22 @@ import {
   RotateCcw,
   ChartNoAxesCombined,
   Settings,
-  ChevronDown,
   ChevronRight,
   Menu,
   X,
-  Bell,
-  ArrowUpRight,
   Radio,
-  HelpCircle,
+  Check,
+  AlertTriangle,
 } from "lucide-react";
 import Dashboard from "./pages/Dashboard";
 import Stations from "./pages/Stations";
-import { Dialog, Badge } from "./components/UI";
+import { Dialog, Badge, reducedMotion } from "./components/UI";
 import { initialRolls, pageInfo } from "./data/mock";
+import { loadRolls } from "./data/api";
+import { PageSkeleton } from "./components/Skeleton";
+import "./design/tokens.css";
 import "./styles.css";
+import "./motion.css";
 const icons = [
   LayoutDashboard,
   ScanLine,
@@ -34,6 +36,14 @@ const icons = [
   ChartNoAxesCombined,
   Settings,
 ];
+const stamp = () =>
+  new Date().toLocaleTimeString("en-GB", {
+    timeZone: "Asia/Kuala_Lumpur",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+const groups = ["", "Port Klang", "Port Klang", "Port Klang", "Sendayan", "Sendayan", "Sendayan", "Management", "Management"];
+let eventKey = 0;
 export default function App() {
   const [page, setPage] = useState(
       Math.max(
@@ -41,33 +51,40 @@ export default function App() {
         Math.min(8, Number.parseInt(location.hash.slice(1), 10) || 0),
       ),
     ),
-    [rolls, setRolls] = useState(initialRolls),
+    [rolls, setRolls] = useState(null),
+    [loadFailed, setLoadFailed] = useState(false),
     [menu, setMenu] = useState(false),
-    [toast, setToast] = useState(""),
+    [toast, setToast] = useState(null),
+    [pulse, setPulse] = useState(() => new Set()),
     [detail, setDetail] = useState(null),
     [dialog, setDialog] = useState(null),
     [threshold, setThreshold] = useState(2),
+    [scrolled, setScrolled] = useState(false),
     [events, setEvents] = useState([
       {
         action: "Roll registered",
+        k: "seed-14:32",
         id: initialRolls[0].id,
         time: "14:32",
         site: "PK",
       },
       {
         action: "Shipment dispatched",
+        k: "seed-13:45",
         id: "DSP-PK-0008",
         time: "13:45",
         site: "PK",
       },
       {
         action: "Roll received at SDY",
+        k: "seed-12:15",
         id: initialRolls[13].id,
         time: "12:15",
         site: "SDY",
       },
       {
         action: "Consumption completed",
+        k: "seed-11:48",
         id: initialRolls[17].id,
         time: "11:48",
         site: "SDY",
@@ -79,62 +96,99 @@ export default function App() {
     setMenu(false);
     window.scrollTo(0, 0);
   };
-  const notify = (t) => {
-    setToast(t);
-    setTimeout(() => setToast(""), 6000);
+  useEffect(() => {
+    if (rolls || loadFailed) return;
+    let live = true;
+    loadRolls().then(
+      (data) => live && setRolls(data),
+      () => live && setLoadFailed(true),
+    );
+    return () => {
+      live = false;
+    };
+  }, [rolls, loadFailed]);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  const rollsRef = useRef(rolls),
+    eventsRef = useRef(events),
+    toastTimer = useRef(),
+    pulseTimer = useRef();
+  rollsRef.current = rolls;
+  eventsRef.current = events;
+  useEffect(
+    () => () => {
+      clearTimeout(toastTimer.current);
+      clearTimeout(pulseTimer.current);
+    },
+    [],
+  );
+  const dismiss = () => {
+    clearTimeout(toastTimer.current);
+    if (reducedMotion()) return setToast(null);
+    setToast((t) => t && { ...t, leaving: true });
+    toastTimer.current = setTimeout(() => setToast(null), 200);
   };
-  const record = (action, id, site) =>
+  const notify = (text, type = "info") => {
+    clearTimeout(toastTimer.current);
+    setToast({ text, type, n: ++eventKey });
+    toastTimer.current = setTimeout(dismiss, 6000);
+  };
+  // Highlights the given rolls with a short success pulse.
+  const flash = (ids) => {
+    clearTimeout(pulseTimer.current);
+    setPulse(new Set(ids));
+    pulseTimer.current = setTimeout(() => setPulse(new Set()), 1800);
+  };
+  // Optimistic update: the change is shown at once, then persisted. A failed
+  // save restores the previous records and tells the operator.
+  const commit = async ({ apply, entries = [], persist, success, ids = [] }) => {
+    const before = { rolls: rollsRef.current, events: eventsRef.current };
+    const time = stamp();
+    setRolls(apply);
     setEvents((prev) => [
-      {
-        action,
-        id,
-        site,
-        time: new Date().toLocaleTimeString("en-GB", {
-          timeZone: "Asia/Kuala_Lumpur",
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-      },
+      ...[...entries].reverse().map((e) => ({ ...e, time, k: ++eventKey })),
       ...prev,
     ]);
+    flash(ids);
+    notify(success, "success");
+    try {
+      await persist?.();
+      return true;
+    } catch {
+      setRolls(before.rolls);
+      setEvents(before.events);
+      setPulse(new Set());
+      notify("Could not save. The change was reverted.", "error");
+      return false;
+    }
+  };
   const confirm = (title, text, action) => setDialog({ title, text, action });
   return (
     <div className="app">
       <aside className={menu ? "sidebar open" : "sidebar"}>
         <a className="brand" href="#0" onClick={() => navigate(0)}>
-          <div className="brand-mark">
-            <Boxes size={25} />
-          </div>
-          <div>
-            <b>
-              SUGIHARA<span>RollFlow</span>
-            </b>
-            <small>MATERIAL IN MOTION</small>
-          </div>
+          <img
+            className="brand-logo"
+            src="/sugihara-logo.png"
+            alt=""
+            width="44"
+            height="44"
+          />
+          <b>
+            SUGIHARA<span>RollFlow</span>
+          </b>
         </a>
-        <div className="workspace">
-          <span className="workspace-icon">S</span>
-          <div>
-            <strong>Factory Operations</strong>
-            <small>Port Klang & Sendayan</small>
-          </div>
-          <ChevronDown size={15} />
-        </div>
         <nav aria-label="Main navigation">
           {pageInfo.map(([name], i) => {
             const Icon = icons[i];
             return (
               <React.Fragment key={name}>
-                {[0, 1, 4, 7].includes(i) && (
-                  <div className="nav-label">
-                    {i === 0
-                      ? "WORKSPACE"
-                      : i === 1
-                        ? "PORT KLANG"
-                        : i === 4
-                          ? "SENDAYAN"
-                          : "MANAGEMENT"}
-                  </div>
+                {[1, 4, 7].includes(i) && (
+                  <div className="nav-label">{groups[i]}</div>
                 )}
                 <button
                   className={"nav-item " + (page === i ? "selected" : "")}
@@ -142,8 +196,9 @@ export default function App() {
                 >
                   <Icon size={18} />
                   <span>{name}</span>
-                  {i > 0 && i < 7 && <small>0{i}</small>}
-                  {page === i && <ChevronRight size={14} />}
+                  {i >= 1 && i <= 6 && (
+                    <small className="nav-number">{i - 1}</small>
+                  )}
                 </button>
               </React.Fragment>
             );
@@ -168,7 +223,7 @@ export default function App() {
       </aside>
       {menu && <div className="nav-scrim" onClick={() => setMenu(false)} />}
       <div className="main">
-        <header className="topbar">
+        <header className={"topbar" + (scrolled ? " scrolled" : "")}>
           <button
             className="mobile-menu icon-button"
             aria-label="Toggle navigation"
@@ -177,53 +232,50 @@ export default function App() {
             <Menu />
           </button>
           <div className="breadcrumb">
-            Workspace <ChevronRight size={14} />{" "}
+            {groups[page] && (
+              <>
+                {groups[page]} <ChevronRight size={14} />
+              </>
+            )}
             <strong>{pageInfo[page]?.[0]}</strong>
-          </div>
-          <div className="top-actions">
-            <button
-              className="icon-button"
-              aria-label="View operational alerts"
-              onClick={() => navigate(0)}
-            >
-              <Bell size={19} />
-              <i className="notification-dot" />
-            </button>
-            <span className="avatar small-avatar">DO</span>
           </div>
         </header>
         <main>
+          <div className="page-view" key={page}>
           <div className="page-heading">
             <div>
-              <span className="eyebrow">
-                {page === 0
-                  ? "YOUR OPERATIONS, CONNECTED"
-                  : page < 4
-                    ? "PORT KLANG OPERATIONS"
-                    : page < 7
-                      ? "SENDAYAN OPERATIONS"
-                      : "WORKSPACE MANAGEMENT"}
-              </span>
               <h1>{pageInfo[page]?.[1]}</h1>
               <p>{pageInfo[page]?.[2]}</p>
             </div>
-            {page === 0 ? (
+            {page === 0 && (
               <button onClick={() => navigate(1)}>
                 <ScanLine size={17} /> Register roll
               </button>
-            ) : (
-              <span className="date-chip">10 Nov 2026 · Demo snapshot</span>
             )}
           </div>
-          {page === 0 ? (
+          {loadFailed ? (
+            <div className="card load-error" role="alert">
+              <p>Could not load the roll records.</p>
+              <button
+                className="secondary"
+                onClick={() => {
+                  setLoadFailed(false);
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          ) : !rolls ? (
+            <PageSkeleton page={page} />
+          ) : page === 0 ? (
             <Dashboard rolls={rolls} events={events} navigate={navigate} />
           ) : (
             <Stations
               key={page}
               page={page}
               rolls={rolls}
-              setRolls={setRolls}
-              record={record}
+              commit={commit}
+              pulse={pulse}
               notify={notify}
               select={setDetail}
               threshold={threshold}
@@ -232,22 +284,27 @@ export default function App() {
               confirm={confirm}
             />
           )}
-          <footer>
-            <span>
-              SUGIHARA <b>RollFlow</b> <span className="footer-divider">/</span>{" "}
-              RFID Roll Traceability
-            </span>
-            <span>Illustrative records · Session-only changes</span>
-          </footer>
+          </div>
         </main>
       </div>
       {toast && (
-        <div role="status" className="toast">
-          {toast}
-          <button
-            aria-label="Dismiss notification"
-            onClick={() => setToast("")}
-          >
+        <div
+          role="status"
+          key={toast.n}
+          className={`toast ${toast.type}${toast.leaving ? " leaving" : ""}`}
+        >
+          {toast.type === "success" && (
+            <span className="toast-icon">
+              <Check size={14} strokeWidth={3} />
+            </span>
+          )}
+          {toast.type === "error" && (
+            <span className="toast-icon">
+              <AlertTriangle size={14} />
+            </span>
+          )}
+          <span>{toast.text}</span>
+          <button aria-label="Dismiss notification" onClick={dismiss}>
             <X size={16} />
           </button>
         </div>
@@ -268,7 +325,7 @@ export default function App() {
           {events
             .filter((e) => e.id === detail.id)
             .map((e, i) => (
-              <p key={i}>
+              <p key={e.k ?? i}>
                 {e.time} · {e.action}
               </p>
             ))}
@@ -279,20 +336,24 @@ export default function App() {
       )}
       {dialog && (
         <Dialog title={dialog.title} onClose={() => setDialog(null)}>
-          <p>{dialog.text}</p>
-          <div className="dialog-actions">
-            <button className="secondary" onClick={() => setDialog(null)}>
-              Cancel
-            </button>
-            <button
-              onClick={() => {
-                dialog.action();
-                setDialog(null);
-              }}
-            >
-              Confirm demo action
-            </button>
-          </div>
+          {(close) => (
+            <>
+              <p>{dialog.text}</p>
+              <div className="dialog-actions">
+                <button className="secondary" onClick={close}>
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    dialog.action();
+                    close();
+                  }}
+                >
+                  Confirm demo action
+                </button>
+              </div>
+            </>
+          )}
         </Dialog>
       )}
     </div>

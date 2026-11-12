@@ -1,18 +1,22 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import { Download, Plus } from "lucide-react";
 import {
-  Package,
-  Truck,
-  CheckCircle,
-  RotateCcw,
-  Download,
-  Plus,
-} from "lucide-react";
-import { Card, KPI, Badge, Scanner, Table, SearchBox } from "../components/UI";
+  Card,
+  KPI,
+  Badge,
+  Scanner,
+  Table,
+  SearchBox,
+  Count,
+  shake,
+} from "../components/UI";
+import TagReader, { useCurrentTag } from "../components/TagReader";
+import { saveRollChanges, saveNewRoll } from "../data/api";
 export default function Stations({
   page,
   rolls,
-  setRolls,
-  record,
+  commit,
+  pulse,
   notify,
   select,
   threshold,
@@ -25,7 +29,19 @@ export default function Stations({
     [selected, setSelected] = useState([]),
     [model, setModel] = useState("All models"),
     [tab, setTab] = useState("Inventory"),
-    [location, setLocation] = useState("SDY-B01");
+    [location, setLocation] = useState("SDY-B01"),
+    [scanFx, setScanFx] = useState(null),
+    [epcValue, setEpcValue] = useState(""),
+    [epcInvalid, setEpcInvalid] = useState(false),
+    epcField = useRef(null);
+  // A tag read by the reader fills the form straight away.
+  const { tag, setTag, clear } = useCurrentTag(rolls, {
+    enabled: page === 1,
+    onRead: (epc) => {
+      setEpcValue(epc);
+      setEpcInvalid(false);
+    },
+  });
   const filtered = rolls.filter(
     (r) =>
       [r.id, r.epc, r.model, r.lot]
@@ -35,33 +51,41 @@ export default function Stations({
       (model === "All models" || r.model === model),
   );
   const update = (ids, patch, action) => {
-    setRolls((prev) =>
-      prev.map((r) => (ids.includes(r.id) ? { ...r, ...patch } : r)),
-    );
-    ids.forEach((id) =>
-      record(
-        action +
+    const site = page === 3 ? "PK" : "SDY";
+    commit({
+      apply: (prev) =>
+        prev.map((r) => (ids.includes(r.id) ? { ...r, ...patch } : r)),
+      entries: ids.map((id) => ({
+        action:
+          action +
           (action === "RFID tag released"
             ? " · EPC " + rolls.find((r) => r.id === id).epc
             : ""),
         id,
-        page === 3 ? "PK" : "SDY",
-      ),
-    );
+        site,
+      })),
+      persist: () => saveRollChanges(ids, patch),
+      success: action + " · demo records updated",
+      ids,
+    });
     setSelected([]);
     setEpc("");
-    notify(action + " · demo records updated");
+  };
+  const reject = (message) => {
+    setScanFx((fx) => ({ type: "error", n: (fx?.n ?? 0) + 1 }));
+    notify(message, "error");
   };
   function scan(status) {
     const r = rolls.find(
       (r) => r.epc?.toUpperCase() === epc.trim().toUpperCase(),
     );
-    if (!r) return notify("Unknown EPC. No matching roll in demo records.");
+    if (!r) return reject("Unknown EPC. No matching roll in demo records.");
     if (!status.includes(r.status))
-      return notify("This roll is not eligible for this operation.");
+      return reject("This roll is not eligible for this operation.");
     if (selected.includes(r.id))
-      return notify("Duplicate scan: roll is already selected.");
+      return reject("Duplicate scan: roll is already selected.");
     setSelected([...selected, r.id]);
+    setScanFx((fx) => ({ type: "ok", n: (fx?.n ?? 0) + 1, id: r.id }));
     setEpc("");
   }
   const controls = (
@@ -81,15 +105,22 @@ export default function Stations({
   );
   const batch = (title, description, button, action, eligible) => (
     <>
-      <Scanner value={epc} onChange={setEpc} onScan={() => scan(eligible)} />
+      <Scanner
+        value={epc}
+        onChange={setEpc}
+        onScan={() => scan(eligible)}
+        feedback={scanFx}
+      />
       <Card title={title} subtitle={description}>
-        <p className="hint">
-          Try a mock EPC from the eligible rolls below. {selected.length}{" "}
-          selected.
-        </p>
+        <p className="hint">{selected.length} selected</p>
         <Table
           rolls={rolls.filter((r) => selected.includes(r.id))}
           onSelect={select}
+          pulse={
+            scanFx?.type === "ok" && selected.includes(scanFx.id)
+              ? new Set([scanFx.id])
+              : undefined
+          }
         />
         <div className="panel-foot">
           <button className="secondary" onClick={() => setSelected([])}>
@@ -114,10 +145,17 @@ export default function Stations({
   if (page === 1)
     return (
       <>
+        <TagReader
+          tag={tag}
+          onClear={() => {
+            clear();
+            setEpcValue("");
+            setEpcInvalid(false);
+          }}
+        />
         <Card
           title="New roll registration"
           subtitle="Permanent Roll ID · reusable RFID association"
-          action={<Badge>Demo form</Badge>}
         >
           <form
             onSubmit={(e) => {
@@ -127,22 +165,46 @@ export default function Stations({
                 rolls.some(
                   (r) => r.epc?.toUpperCase() === data.epc.toUpperCase(),
                 )
-              )
-                return notify("EPC is already assigned to an active roll.");
+              ) {
+                const field = epcField.current;
+                setEpcInvalid(true);
+                field.focus();
+                shake(field);
+                return notify(
+                  "EPC is already assigned to an active roll.",
+                  "error",
+                );
+              }
               const id = `RF-PK-20261110-${String(rolls.length + 1).padStart(4, "0")}`;
-              setRolls([
-                ...rolls,
-                {
-                  ...data,
-                  epc: data.epc.toUpperCase(),
-                  id,
-                  length: Number(data.length),
-                  status: "Available",
-                },
-              ]);
-              record("Roll registered", id, "PK");
-              notify("Demo roll registered: " + id);
+              const roll = {
+                ...data,
+                epc: data.epc.toUpperCase(),
+                id,
+                length: Number(data.length),
+                status: "Available",
+              };
+              // Optimistic: the tag box confirms at once; a failed save puts it back.
+              setTag((t) =>
+                t && t.epc === roll.epc
+                  ? { ...t, state: "registered", rollId: id }
+                  : t,
+              );
+              commit({
+                apply: (prev) => [...prev, roll],
+                entries: [{ action: "Roll registered", id, site: "PK" }],
+                persist: () => saveNewRoll(roll),
+                success: "Demo roll registered: " + id,
+                ids: [id],
+              }).then((saved) => {
+                if (!saved)
+                  setTag((t) =>
+                    t?.rollId === id
+                      ? { ...t, state: "ready", rollId: undefined }
+                      : t,
+                  );
+              });
               e.target.reset();
+              setEpcValue("");
             }}
           >
             <div className="form-grid">
@@ -156,7 +218,19 @@ export default function Stations({
               <label>
                 RFID EPC
                 <input
+                  ref={epcField}
                   name="epc"
+                  value={epcValue}
+                  aria-invalid={
+                    epcInvalid || tag?.state === "duplicate" || undefined
+                  }
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setEpcValue(value);
+                    setEpcInvalid(false);
+                    // Typing a different number means it is no longer the tag read.
+                    if (tag && value.trim().toUpperCase() !== tag.epc) clear();
+                  }}
                   required
                   pattern="[A-Fa-f0-9]{8,64}"
                   placeholder="Enter 8–64 hexadecimal characters"
@@ -198,15 +272,15 @@ export default function Stations({
               <span className="subtle">
                 Demo ID only. Production IDs will be generated by the backend.
               </span>
-              <button type="submit">
+              <button type="submit" disabled={tag?.state === "duplicate"}>
                 <Plus size={16} /> Register roll
               </button>
             </div>
           </form>
         </Card>
-        <Card title="Registered rolls" subtitle="All mock roll records">
+        <Card title="Registered rolls">
           {controls}
-          <Table rolls={filtered} onSelect={select} />
+          <Table rolls={filtered} onSelect={select} pulse={pulse} />
         </Card>
       </>
     );
@@ -217,8 +291,6 @@ export default function Stations({
           <KPI
             label="Available rolls"
             value={rolls.filter((r) => r.status === "Available").length}
-            note="Currently at Port Klang"
-            icon={Package}
           />
           <KPI
             label="Models in stock"
@@ -229,8 +301,6 @@ export default function Stations({
                   .map((r) => r.model),
               ).size
             }
-            note="Distinct material models"
-            icon={Package}
           />
           <KPI
             label="Total available length"
@@ -239,8 +309,6 @@ export default function Stations({
                 .filter((r) => r.status === "Available")
                 .reduce((s, r) => s + r.length, 0) + " m"
             }
-            note="Available rolls only"
-            icon={Truck}
           />
         </div>
         <Card
@@ -251,6 +319,7 @@ export default function Stations({
           <Table
             rolls={filtered.filter((r) => r.status === "Available")}
             onSelect={select}
+            pulse={pulse}
           />
         </Card>
       </>
@@ -292,6 +361,7 @@ export default function Stations({
           <Table
             rolls={rolls.filter((r) => r.status === "Available")}
             onSelect={select}
+            pulse={pulse}
           />
         </Card>
       </>
@@ -302,12 +372,13 @@ export default function Stations({
         <Card
           title="Incoming shipment"
           subtitle="DSP-PK-0008 · Port Klang → Sendayan"
-          action={<Badge>Pending receipt</Badge>}
         >
           <div className="receipt-summary">
             <div>
               <strong>
-                {rolls.filter((r) => r.status === "In Transit").length}
+                <Count
+                  value={rolls.filter((r) => r.status === "In Transit").length}
+                />
               </strong>
               <span>Pending rolls</span>
             </div>
@@ -343,6 +414,7 @@ export default function Stations({
           <Table
             rolls={rolls.filter((r) => r.status === "In Transit")}
             onSelect={select}
+            pulse={pulse}
           />
         </Card>
       </>
@@ -377,15 +449,12 @@ export default function Stations({
                   <Card
                     key={m}
                     title={m}
-                    subtitle="Available SDY stock"
                     action={
-                      <Badge>
-                        {count < threshold ? "Low stock" : "Available"}
-                      </Badge>
+                      count < threshold ? <Badge>Low stock</Badge> : undefined
                     }
                   >
                     <strong className="stock-number">
-                      {count}
+                      <Count value={count} />
                       <small> rolls</small>
                     </strong>
                     <div className="stock-track">
@@ -413,6 +482,7 @@ export default function Stations({
               <Table
                 rolls={filtered.filter((r) => r.status === "Received")}
                 onSelect={select}
+                pulse={pulse}
               />
             </Card>
           </>
@@ -448,6 +518,7 @@ export default function Stations({
                     (tab === "Issue to production" ? "Received" : "Issued"),
                 )}
                 onSelect={select}
+                pulse={pulse}
               />
             </Card>
           </>
@@ -476,6 +547,7 @@ export default function Stations({
           <Table
             rolls={rolls.filter((r) => r.status === "Completed")}
             onSelect={select}
+            pulse={pulse}
           />
         </Card>
       </>
@@ -517,7 +589,7 @@ export default function Stations({
           }
         >
           {controls}
-          <Table rolls={filtered} onSelect={select} />
+          <Table rolls={filtered} onSelect={select} pulse={pulse} />
         </Card>
         <Card
           title="Movement history"
@@ -535,7 +607,7 @@ export default function Stations({
               </thead>
               <tbody>
                 {events.map((e, i) => (
-                  <tr key={i}>
+                  <tr key={e.k ?? i} style={{ "--i": 0 }}>
                     <td>{e.time}</td>
                     <td>{e.action}</td>
                     <td className="mono">{e.id}</td>
@@ -559,7 +631,7 @@ export default function Stations({
           onSubmit={(e) => {
             e.preventDefault();
             setThreshold(Number(new FormData(e.target).get("threshold")));
-            notify("Demo stock threshold updated");
+            notify("Demo stock threshold updated", "success");
           }}
         >
           <div className="form-grid">
@@ -592,7 +664,7 @@ export default function Stations({
               <strong>Demo Operator</strong>
               <p>All station previews</p>
             </div>
-            <Badge>Demo access</Badge>
+            <span className="subtle">Demo access</span>
           </div>
           <p className="hint">
             Production roles and permissions will be supplied by your backend
