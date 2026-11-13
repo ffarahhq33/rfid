@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Download, Plus } from "lucide-react";
 import {
   Card,
@@ -11,7 +11,7 @@ import {
   shake,
 } from "../components/UI";
 import TagReader, { useCurrentTag } from "../components/TagReader";
-import { saveRollChanges, saveNewRoll } from "../data/api";
+import { saveRollChanges, saveNewRoll, loadStation0Registrations, loadStation1Inventory } from "../data/api";
 export default function Stations({
   page,
   rolls,
@@ -42,6 +42,68 @@ export default function Stations({
       setEpcInvalid(false);
     },
   });
+  // Station 0 history is read from PostgreSQL; other pages retain team demo data.
+  const [registering, setRegistering] = useState(false);
+  const [historyRolls, setHistoryRolls] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+
+  async function refreshHistory() {
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const records = await loadStation0Registrations();
+      setHistoryRolls(records);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (page === 1) {
+      refreshHistory();
+    }
+  }, [page]);
+
+  // Station 1 is reader-free: pull inventory from PostgreSQL.
+  const [pkStorageRolls, setPkStorageRolls] = useState([]);
+  const [pkStorageLoading, setPkStorageLoading] = useState(false);
+  const [pkStorageError, setPkStorageError] = useState("");
+
+  async function refreshPkStorage() {
+    setPkStorageLoading(true);
+    setPkStorageError("");
+    try {
+      setPkStorageRolls(await loadStation1Inventory());
+    } catch (error) {
+      setPkStorageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPkStorageLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (page !== 2) return;
+    refreshPkStorage();
+    const timer = setInterval(refreshPkStorage, 10000);
+    return () => clearInterval(timer);
+  }, [page]);
+
+  const filteredPkStorage = pkStorageRolls.filter((r) =>
+    [r.id, r.epc, r.model, r.lot].join(" ").toLowerCase().includes(query.toLowerCase()) &&
+    (model === "All models" || r.model === model),
+  );
+
+  const filteredHistory = historyRolls.filter((r) =>
+    [r.id, r.epc, r.model, r.lot]
+      .join(" ")
+      .toLowerCase()
+      .includes(query.toLowerCase()) &&
+    (model === "All models" || r.model === model),
+  );
+
   const filtered = rolls.filter(
     (r) =>
       [r.id, r.epc, r.model, r.lot]
@@ -158,53 +220,45 @@ export default function Stations({
           subtitle="Permanent Roll ID · reusable RFID association"
         >
           <form
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
-              const data = Object.fromEntries(new FormData(e.target));
-              if (
-                rolls.some(
-                  (r) => r.epc?.toUpperCase() === data.epc.toUpperCase(),
-                )
-              ) {
-                const field = epcField.current;
-                setEpcInvalid(true);
-                field.focus();
-                shake(field);
-                return notify(
-                  "EPC is already assigned to an active roll.",
-                  "error",
+              if (registering) return;
+              const form = e.currentTarget;
+              const data = Object.fromEntries(new FormData(form));
+              const submittedEpc = String(data.epc || "").trim().toUpperCase();
+              setRegistering(true);
+              setEpcInvalid(false);
+
+              try {
+                // PostgreSQL is authoritative; never generate IDs in React.
+                const result = await saveNewRoll({
+                  epc: submittedEpc,
+                  model: data.model,
+                  lot: data.lot,
+                  length: Number(data.length),
+                  location: data.location,
+                });
+                const newId = result.roll.roll_id;
+                setTag((previous) =>
+                  previous?.epc === submittedEpc
+                    ? { ...previous, state: "registered", rollId: newId }
+                    : previous,
                 );
+                notify(`Roll registered successfully: ${newId}`, "success");
+                form.reset();
+                setEpcValue("");
+                await refreshHistory();
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                if (/already registered|already exists|duplicate|epc/i.test(message)) {
+                  setEpcInvalid(true);
+                  epcField.current?.focus();
+                  if (epcField.current) shake(epcField.current);
+                }
+                notify(`Registration failed: ${message}`, "error");
+              } finally {
+                setRegistering(false);
               }
-              const id = `RF-PK-20261110-${String(rolls.length + 1).padStart(4, "0")}`;
-              const roll = {
-                ...data,
-                epc: data.epc.toUpperCase(),
-                id,
-                length: Number(data.length),
-                status: "Available",
-              };
-              // Optimistic: the tag box confirms at once; a failed save puts it back.
-              setTag((t) =>
-                t && t.epc === roll.epc
-                  ? { ...t, state: "registered", rollId: id }
-                  : t,
-              );
-              commit({
-                apply: (prev) => [...prev, roll],
-                entries: [{ action: "Roll registered", id, site: "PK" }],
-                persist: () => saveNewRoll(roll),
-                success: "Demo roll registered: " + id,
-                ids: [id],
-              }).then((saved) => {
-                if (!saved)
-                  setTag((t) =>
-                    t?.rollId === id
-                      ? { ...t, state: "ready", rollId: undefined }
-                      : t,
-                  );
-              });
-              e.target.reset();
-              setEpcValue("");
             }}
           >
             <div className="form-grid">
@@ -270,7 +324,7 @@ export default function Stations({
             </div>
             <div className="panel-foot">
               <span className="subtle">
-                Demo ID only. Production IDs will be generated by the backend.
+                Roll ID and registration time are assigned by PostgreSQL.
               </span>
               <button type="submit" disabled={tag?.state === "duplicate"}>
                 <Plus size={16} /> Register roll
@@ -279,8 +333,36 @@ export default function Stations({
           </form>
         </Card>
         <Card title="Registered rolls">
-          {controls}
-          <Table rolls={filtered} onSelect={select} pulse={pulse} />
+          <div className="filters">
+            <SearchBox value={query} onChange={setQuery} />
+            <select
+              aria-label="Filter model"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              {["All models", "D27A", "D38L", "P15B", "D42N"].map((m) => (
+                <option key={m}>{m}</option>
+              ))}
+            </select>
+            <span className="subtle">{filteredHistory.length} matching rolls</span>
+            <button
+              className="secondary"
+              type="button"
+              onClick={refreshHistory}
+              disabled={historyLoading}
+            >
+              {historyLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+          {historyError ? (
+            <p className="hint" role="alert">
+              Cannot load PostgreSQL registrations: {historyError}
+            </p>
+          ) : historyLoading && historyRolls.length === 0 ? (
+            <p className="hint">Loading PostgreSQL registrations...</p>
+          ) : (
+            <Table rolls={filteredHistory} onSelect={select} pulse={pulse} />
+          )}
         </Card>
       </>
     );
@@ -288,39 +370,32 @@ export default function Stations({
     return (
       <>
         <div className="kpi-grid three">
-          <KPI
-            label="Available rolls"
-            value={rolls.filter((r) => r.status === "Available").length}
-          />
-          <KPI
-            label="Models in stock"
-            value={
-              new Set(
-                rolls
-                  .filter((r) => r.status === "Available")
-                  .map((r) => r.model),
-              ).size
-            }
-          />
-          <KPI
-            label="Total available length"
-            value={
-              rolls
-                .filter((r) => r.status === "Available")
-                .reduce((s, r) => s + r.length, 0) + " m"
-            }
-          />
+          <KPI label="Available rolls" value={pkStorageRolls.length} />
+          <KPI label="Models in stock" value={new Set(pkStorageRolls.map((r) => r.model)).size} />
+          <KPI label="Total available length" value={
+            pkStorageRolls.reduce((sum, r) => sum + r.length, 0).toLocaleString() + " m"
+          } />
         </div>
-        <Card
-          title="PK roll inventory"
-          subtitle="Select a Roll ID to inspect its details"
-        >
-          {controls}
-          <Table
-            rolls={filtered.filter((r) => r.status === "Available")}
-            onSelect={select}
-            pulse={pulse}
-          />
+        <Card title="PK roll inventory" subtitle="Live PostgreSQL inventory · Station 1">
+          <div className="filters">
+            <SearchBox value={query} onChange={setQuery} />
+            <select aria-label="Filter model" value={model} onChange={(e) => setModel(e.target.value)}>
+              {["All models", "D27A", "D38L", "P15B", "D42N"].map((m) => (
+                <option key={m}>{m}</option>
+              ))}
+            </select>
+            <span className="subtle">{filteredPkStorage.length} matching rolls</span>
+            <button className="secondary" type="button" onClick={refreshPkStorage} disabled={pkStorageLoading}>
+              {pkStorageLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+          {pkStorageError ? (
+            <p className="hint" role="alert">Cannot load PK storage: {pkStorageError}</p>
+          ) : pkStorageLoading && pkStorageRolls.length === 0 ? (
+            <p className="hint">Loading PostgreSQL inventory...</p>
+          ) : (
+            <Table rolls={filteredPkStorage} onSelect={select} pulse={pulse} />
+          )}
         </Card>
       </>
     );

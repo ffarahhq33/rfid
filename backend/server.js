@@ -22,6 +22,9 @@ app.use(express.json());
 const station0Routes = require("./station/station0/routes");
 app.use("/api/station0", station0Routes);
 
+//station 1- storage
+const station1Routes = require("./station/station1/routes");
+app.use("/api/station1", station1Routes);
 // Station 2 - RFID Dispatch
 const station2Routes = require("./station/station2/routes");
 app.use("/api/station2", station2Routes);

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Radio, Check, AlertTriangle } from "lucide-react";
 import { shake } from "./UI";
 import { Skeleton } from "./Skeleton";
-import { checkTag } from "../data/api";
+import { checkTag, loadStation0LatestScan } from "../data/api";
 import { emitTagRead, simulateRead, subscribeToReader } from "../data/reader";
 
 // Holds the tag the reader most recently sent.
@@ -32,7 +32,7 @@ export function useCurrentTag(rolls, { enabled = true, onRead } = {}) {
       t?.n === n
         ? {
             ...t,
-            state: result.available ? "ready" : "duplicate",
+            state: result.available === null ? "unverified" : result.available ? "ready" : "duplicate",
             rollId: result.rollId,
           }
         : t,
@@ -43,6 +43,39 @@ export function useCurrentTag(rolls, { enabled = true, onRead } = {}) {
     if (!enabled) return;
     return subscribeToReader(receive);
   }, [enabled, receive]);
+
+  // Read latest real EPC from the existing Station 0 Node.js reader inbox.
+  // Only run on Station 0; do not affect other station pages.
+  const lastScanKey = useRef(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let stopped = false;
+    let running = false;
+
+    async function poll() {
+      if (running || stopped) return;
+      running = true;
+      try {
+        const scan = await loadStation0LatestScan();
+        if (!scan || stopped) return;
+        // Same EPC may be scanned again later; prefer backend scan timestamp.
+        const key = scan.epc + ':' + String(scan.at ?? '');
+        if (lastScanKey.current === key) return;
+        lastScanKey.current = key;
+        // Receive via the existing reader event pathway used by the UI.
+        emitTagRead(scan.epc);
+      } catch (error) {
+        // Transient reader/API errors must not clear the operator's form.
+        if (!stopped) console.warn('[Station 0 RFID]', error.message);
+      } finally {
+        running = false;
+      }
+    }
+
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => { stopped = true; clearInterval(interval); };
+  }, [enabled]);
 
   return { tag, setTag, clear: () => setTag(null) };
 }
@@ -75,6 +108,12 @@ function Status({ tag }) {
     return (
       <span className="tag-status danger" key={state}>
         <AlertTriangle size={14} /> Already assigned to {tag.rollId}
+      </span>
+    );
+  if (state === "unverified")
+    return (
+      <span className="tag-status info" key={state}>
+        <AlertTriangle size={14} /> Cannot verify EPC · registration will validate
       </span>
     );
   if (state === "registered")
@@ -130,7 +169,7 @@ export default function TagReader({ tag, onClear }) {
         <span className="subtle">
           {tag
             ? "Received " + clock(tag.at)
-            : "Reader offline · simulate a read to preview this step"}
+            : "Waiting for RFID reader scan"}
         </span>
         <div className="tag-actions">
           {tag && (
